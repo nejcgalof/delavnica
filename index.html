@@ -229,7 +229,7 @@
             <button id="stop">Stop</button>
             <div class="slider-label">
                 <label for="conf">Confidence:</label>
-                <input type="range" id="conf" min="0.01" max="0.99" step="0.01" value="0.35">
+                <input type="range" id="conf" min="0.1" max="0.99" step="0.01" value="0.35">
                 <span id="confOut">0.35</span>
             </div>
         </div>
@@ -277,7 +277,8 @@
         const placeholder = document.getElementById('placeholder');
         const status = document.getElementById('status');
 
-        let lastDetections = [];
+        const CONF_FLOOR = Number(document.getElementById('conf').min);
+        let lastResult = null;
 
         const startCamBtn = document.getElementById('startCam');
         const openFileBtn = document.getElementById('openFile');
@@ -297,8 +298,33 @@
         let frameCount = 0;
         let smoothedFps = 0;
 
+        function visibleDetections() {
+            const threshold = Number(confSlider.value);
+            return lastResult ? lastResult.detections.filter(d => d.conf >= threshold) : [];
+        }
+
+        function renderDetections() {
+            const list = visibleDetections();
+            draw(list);
+            const counts = {};
+            for (const d of list) counts[d.label] = (counts[d.label] || 0) + 1;
+            const text = Object.entries(counts)
+                .sort((a, b) => b[1] - a[1])
+                .map(([label, n]) => (n > 1 ? `${label} ×${n}` : label))
+                .join(', ');
+            statusFound.textContent = text || 'nothing';
+        }
+
+        function show(data, fps) {
+            lastResult = data;
+            statusMs.textContent = Math.round(data.inference_ms);
+            statusFps.textContent = fps ? fps.toFixed(1) : '–';
+            renderDetections();
+        }
+
         confSlider.addEventListener('input', (e) => {
-            confOut.textContent = parseFloat(e.target.value).toFixed(2);
+            confOut.textContent = Number(e.target.value).toFixed(2);
+            if (lastResult) renderDetections();
         });
 
         function updateStatus(msg, isError = false) {
@@ -309,7 +335,7 @@
         function stopAll() {
             runId = null;
             isRunning = false;
-            lastDetections = [];
+            lastResult = null;
             if (video.srcObject) {
                 video.srcObject.getTracks().forEach(t => t.stop());
                 video.srcObject = null;
@@ -389,7 +415,7 @@
 
                 try {
                     const conf = parseFloat(confSlider.value);
-                    const resp = await fetch(`/detect?conf=${conf}`, {
+                    const resp = await fetch(`/detect?conf=${CONF_FLOOR}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'image/jpeg' },
                         body: blob
@@ -412,19 +438,7 @@
                         lastFrameTime = now;
                     }
 
-                    statusMs.textContent = result.inference_ms.toFixed(1);
-
-                    const classCount = {};
-                    result.detections.forEach(d => {
-                        classCount[d.label] = (classCount[d.label] || 0) + 1;
-                    });
-                    const summary = Object.entries(classCount)
-                        .map(([k, v]) => `${k} ×${v}`)
-                        .join(', ') || 'none';
-                    statusFound.textContent = summary;
-
-                    lastDetections = result.detections;
-                    draw(lastDetections);
+                    show(result, smoothedFps);
 
                 } catch (e) {
                     if (isRunning && runId === currentRunId) {
@@ -583,11 +597,7 @@
 
         stopBtn.addEventListener('click', stopAll);
 
-        window.addEventListener('resize', () => {
-            if (lastDetections.length > 0 && isRunning) {
-                draw(lastDetections);
-            }
-        });
+        window.addEventListener('resize', () => { if (lastResult) renderDetections(); });
 
         fetchInfo();
     </script>
