@@ -17,7 +17,7 @@ Project constitution for coding agents working in this repository. It is loaded 
 - **Product shape.** One small HTTP service plus one self-contained HTML5 page. `POST /detect` takes a raw JPEG or PNG and returns JSON.
 - **Release-one scope.** Camera, image and video-file input; adjustable confidence; boxes over the media; a readout of FPS, server milliseconds and detected classes; optional local HTTPS.
 - **Priority.** The first use is a demo for a manager. A verified, working demo beats new features.
-- **Status at creation (2026-09-21; update when verified).** `server.py` and `index.html` were syntax-checked only. They have never been run end-to-end with the real model. Do not assume they work, and do not report them as working until you have run them. Some defects are suspected but unverified (see section 18).
+- **Status (verified 2026-09-21).** Run on this CPU with yolo26s.pt. scripts/smoke_http.py: 10 passed, 0 failed, 0 skipped. Not yet verified: browser flows (camera, image, video, slider) and performance numbers.
 
 **Stack and why**
 
@@ -323,12 +323,11 @@ Use only these outcomes: passed, failed, skipped, not run, blocked, out of scope
 
 ## 18. Known gaps (remove as they are fixed or disproved)
 
-- **Suspected defect, unverified:** an empty request body probably makes `cv2.imdecode` raise, which would return `500` instead of `400`.
 - `/detect` reads the whole request body with no size limit.
 - `inference_ms` includes time spent waiting for the lock.
 - `/info` reports the device as a constant string rather than a measured value.
 - The first start needs internet to download weights.
-- No tests, README or `.gitignore` exist yet.
+- No tests or benchmark exist yet.
 - Exported ONNX and OpenVINO models have a fixed input size: keep `YOLO_IMGSZ` equal to the export size.
 - The overlay shows the latest detections over live video, so boxes lag by one inference. This is expected.
 
