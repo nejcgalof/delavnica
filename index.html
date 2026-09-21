@@ -150,9 +150,6 @@
             height: auto;
         }
 
-        #video {
-            transform: scaleX(-1);
-        }
 
         #overlay {
             position: absolute;
@@ -294,9 +291,10 @@
 
         let runId = null;
         let isRunning = false;
-        let lastFrameTime = Date.now();
-        let frameCount = 0;
+        let lastFrameAt = 0;
         let smoothedFps = 0;
+        let sourceToken = 0;
+        const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
         function visibleDetections() {
             const threshold = Number(confSlider.value);
@@ -318,7 +316,7 @@
         function show(data, fps) {
             lastResult = data;
             statusMs.textContent = Math.round(data.inference_ms);
-            statusFps.textContent = fps ? fps.toFixed(1) : '–';
+            statusFps.textContent = fps ? Number(fps).toFixed(1) : '–';
             renderDetections();
         }
 
@@ -336,14 +334,24 @@
             runId = null;
             isRunning = false;
             lastResult = null;
+            sourceToken++;
             if (video.srcObject) {
                 video.srcObject.getTracks().forEach(t => t.stop());
                 video.srcObject = null;
             }
+            video.pause();
+            if (video.getAttribute('src')) {
+                URL.revokeObjectURL(video.src);
+                video.removeAttribute('src');
+                video.load();
+            }
+            if (still.getAttribute('src')) {
+                URL.revokeObjectURL(still.src);
+                still.removeAttribute('src');
+            }
             video.hidden = true;
             still.hidden = true;
             overlay.hidden = true;
-            stage.hidden = true;
             stage.classList.remove('live');
             placeholder.hidden = false;
             updateStatus('Ready');
@@ -355,11 +363,12 @@
         function begin() {
             isRunning = true;
             runId = Math.random();
+            lastFrameAt = 0;
+            smoothedFps = 0;
             statusFps.textContent = '-';
             statusMs.textContent = '-';
             statusFound.textContent = '-';
-            frameCount = 0;
-            lastFrameTime = Date.now();
+            return runId;
         }
 
         function colorParts(label) {
@@ -406,151 +415,92 @@
             }
         }
 
-        async function sendFrame(canvas) {
-            if (!isRunning) return;
-            const currentRunId = runId;
-
-            canvas.toBlob(async (blob) => {
-                if (!isRunning || runId !== currentRunId) return;
-
-                try {
-                    const conf = parseFloat(confSlider.value);
-                    const resp = await fetch(`/detect?conf=${CONF_FLOOR}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'image/jpeg' },
-                        body: blob
-                    });
-
-                    if (!resp.ok) {
-                        updateStatus(`Error: ${resp.status}`, true);
-                        return;
-                    }
-
-                    const result = await resp.json();
-                    frameCount++;
-
-                    const now = Date.now();
-                    const elapsed = now - lastFrameTime;
-                    if (elapsed > 500) {
-                        smoothedFps = (frameCount / elapsed * 1000 * 0.7 + smoothedFps * 0.3).toFixed(1);
-                        statusFps.textContent = smoothedFps;
-                        frameCount = 0;
-                        lastFrameTime = now;
-                    }
-
-                    show(result, smoothedFps);
-
-                } catch (e) {
-                    if (isRunning && runId === currentRunId) {
-                        updateStatus(`Network error: ${e.message}`, true);
-                    }
-                }
-            }, 'image/jpeg', JPEG_QUALITY);
+        function showStage() {
+            placeholder.hidden = true;
+            stage.classList.add('live');
+            overlay.hidden = false;
         }
 
-        async function cameraLoop() {
-            begin();
-            updateStatus('Streaming from camera...');
+        function grabScaled(source, w, h) {
+            const scale = Math.min(1, SEND_MAX / Math.max(w, h));
+            const c = document.createElement('canvas');
+            c.width = Math.max(1, Math.round(w * scale));
+            c.height = Math.max(1, Math.round(h * scale));
+            c.getContext('2d').drawImage(source, 0, 0, c.width, c.height);
+            return c;
+        }
 
-            while (isRunning && runId !== null) {
-                if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                    const tempCanvas = document.createElement('canvas');
-                    tempCanvas.width = video.videoWidth;
-                    tempCanvas.height = video.videoHeight;
-                    const ctx = tempCanvas.getContext('2d');
-                    ctx.drawImage(video, 0, 0);
+        async function sendFrame(canvas, id) {
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY));
+            if (!blob || id !== runId) return;
+            try {
+                const resp = await fetch(`/detect?conf=${CONF_FLOOR}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'image/jpeg' },
+                    body: blob,
+                });
+                if (id !== runId) return;
+                if (!resp.ok) {
+                    updateStatus(`The detector answered with error ${resp.status}. Trying again...`, true);
+                    await sleep(1000);
+                    return;
+                }
+                const result = await resp.json();
+                if (id !== runId) return;
+                const now = performance.now();
+                if (lastFrameAt) {
+                    const instant = 1000 / (now - lastFrameAt);
+                    smoothedFps = smoothedFps ? 0.8 * smoothedFps + 0.2 * instant : instant;
+                }
+                lastFrameAt = now;
+                if (status.className === 'error') updateStatus('Detecting...');
+                show(result, smoothedFps);
+            } catch (e) {
+                if (id !== runId) return;
+                updateStatus(`Cannot reach the detector (${e.message}). Trying again...`, true);
+                await sleep(1000);
+            }
+        }
 
-                    stage.width = tempCanvas.width;
-                    stage.height = tempCanvas.height;
-                    const stageCtx = stage.getContext('2d');
-                    stageCtx.drawImage(video, 0, 0);
-
-                    const scale = Math.max(tempCanvas.width, tempCanvas.height) / SEND_MAX;
-                    const w = Math.round(tempCanvas.width / scale);
-                    const h = Math.round(tempCanvas.height / scale);
-                    const resized = document.createElement('canvas');
-                    resized.width = w;
-                    resized.height = h;
-                    resized.getContext('2d').drawImage(tempCanvas, 0, 0, w, h);
-
-                    await new Promise(resolve => {
-                        resized.toBlob(async (blob) => {
-                            await sendFrame(resized);
-                            resolve();
-                        }, 'image/jpeg', JPEG_QUALITY);
-                    });
-
-                    await new Promise(r => setTimeout(r, 50));
+        async function liveLoop(message) {
+            const id = begin();
+            updateStatus(message);
+            while (id === runId) {
+                if (video.readyState >= 2 && video.videoWidth > 0) {
+                    await sendFrame(grabScaled(video, video.videoWidth, video.videoHeight), id);
                 } else {
-                    await new Promise(r => setTimeout(r, 100));
+                    await sleep(100);
                 }
             }
         }
 
-        async function imageMode(imgElement) {
-            begin();
+        async function imageMode() {
+            const id = begin();
             updateStatus('Detecting in image...');
-
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = imgElement.naturalWidth || imgElement.width;
-            tempCanvas.height = imgElement.naturalHeight || imgElement.height;
-            tempCanvas.getContext('2d').drawImage(imgElement, 0, 0);
-
-            const scale = Math.max(tempCanvas.width, tempCanvas.height) / SEND_MAX;
-            const w = Math.round(tempCanvas.width / scale);
-            const h = Math.round(tempCanvas.height / scale);
-            const resized = document.createElement('canvas');
-            resized.width = w;
-            resized.height = h;
-            resized.getContext('2d').drawImage(tempCanvas, 0, 0, w, h);
-
-            await sendFrame(resized);
-            updateStatus('Ready');
-        }
-
-        async function videoMode(videoElement) {
-            begin();
-            updateStatus('Playing video...');
-
-            while (isRunning && runId !== null) {
-                if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
-                    const tempCanvas = document.createElement('canvas');
-                    tempCanvas.width = videoElement.videoWidth;
-                    tempCanvas.height = videoElement.videoHeight;
-                    tempCanvas.getContext('2d').drawImage(videoElement, 0, 0);
-
-                    const scale = Math.max(tempCanvas.width, tempCanvas.height) / SEND_MAX;
-                    const w = Math.round(tempCanvas.width / scale);
-                    const h = Math.round(tempCanvas.height / scale);
-                    const resized = document.createElement('canvas');
-                    resized.width = w;
-                    resized.height = h;
-                    resized.getContext('2d').drawImage(tempCanvas, 0, 0, w, h);
-
-                    await sendFrame(resized);
-                    await new Promise(r => setTimeout(r, 50));
-                } else {
-                    await new Promise(r => setTimeout(r, 100));
-                }
-            }
+            await sendFrame(grabScaled(still, still.naturalWidth, still.naturalHeight), id);
+            if (id === runId && status.className !== 'error') updateStatus('Ready');
         }
 
         startCamBtn.addEventListener('click', async () => {
             stopAll();
+            const token = sourceToken;
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                updateStatus('This browser blocks the camera on this address. Open the page over HTTPS, or use http://localhost on the computer that runs the server.', true);
+                return;
+            }
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                if (token !== sourceToken) {
+                    stream.getTracks().forEach(t => t.stop());
+                    return;
+                }
                 video.srcObject = stream;
                 video.hidden = false;
-                placeholder.hidden = true;
-                stage.hidden = false;
-                stage.classList.add('live');
-                overlay.hidden = false;
-
-                video.addEventListener('loadedmetadata', () => {
-                    cameraLoop();
-                }, { once: true });
+                showStage();
+                await video.play();
+                liveLoop('Streaming from camera...');
             } catch (e) {
-                updateStatus(`Camera error: ${e.message}`, true);
+                updateStatus(`The camera is not available: ${e.message}`, true);
             }
         });
 
@@ -560,38 +510,30 @@
 
         fileInput.addEventListener('change', (e) => {
             stopAll();
+            const token = sourceToken;
             const file = e.target.files[0];
+            e.target.value = '';
             if (!file) return;
-
             const url = URL.createObjectURL(file);
-            const isVideo = file.type.startsWith('video');
-
-            if (isVideo) {
-                const videoEl = document.createElement('video');
-                videoEl.src = url;
-                videoEl.loop = true;
-                videoEl.muted = true;
-                videoEl.addEventListener('loadedmetadata', () => {
-                    still.hidden = true;
-                    placeholder.hidden = true;
-                    stage.hidden = false;
-                    stage.classList.add('live');
-                    overlay.hidden = false;
-                    videoEl.play();
-                    videoMode(videoEl);
-                });
+            if (file.type.startsWith('video')) {
+                video.loop = true;
+                video.muted = true;
+                video.hidden = false;
+                video.addEventListener('loadeddata', async () => {
+                    if (token !== sourceToken) return;
+                    showStage();
+                    await video.play();
+                    liveLoop('Playing video...');
+                }, { once: true });
+                video.src = url;
             } else {
-                const imgEl = document.createElement('img');
-                imgEl.src = url;
-                imgEl.addEventListener('load', () => {
-                    still.src = url;
-                    still.hidden = false;
-                    placeholder.hidden = true;
-                    stage.hidden = false;
-                    stage.classList.add('live');
-                    overlay.hidden = false;
-                    imageMode(still);
-                });
+                still.hidden = false;
+                still.onload = () => {
+                    if (token !== sourceToken) return;
+                    showStage();
+                    imageMode();
+                };
+                still.src = url;
             }
         });
 
