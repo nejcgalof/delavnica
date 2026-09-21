@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# YOLO weights and exported models
+*.pt
+*.onnx
+*_openvino_model/
+runs/
+det_results/
+
+# HTTPS certificates and keys
+cert.pem
+key.pem
+
+# Captured media
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.mov
