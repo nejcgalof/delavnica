@@ -113,15 +113,20 @@
             display: none;
         }
 
-        .media-container {
+        .stage {
             position: relative;
+            overflow: hidden;
             width: 100%;
             max-width: 800px;
             margin: 0 auto 20px;
             border: 1px solid var(--border-color);
             border-radius: 4px;
             background: #000;
-            aspect-ratio: 4 / 3;
+            aspect-ratio: 16 / 9;
+        }
+
+        .stage.live {
+            aspect-ratio: auto;
         }
 
         #placeholder {
@@ -138,39 +143,23 @@
             background: #222;
         }
 
-        #stage {
-            position: absolute;
-            top: 0;
-            left: 0;
+        .stage video,
+        .stage img {
+            display: block;
             width: 100%;
-            height: 100%;
-            object-fit: contain;
+            height: auto;
         }
 
         #video {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
             transform: scaleX(-1);
-        }
-
-        #still {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
         }
 
         #overlay {
             position: absolute;
-            top: 0;
-            left: 0;
-            cursor: crosshair;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
         }
 
         .status-area {
@@ -245,13 +234,12 @@
             </div>
         </div>
 
-        <div class="media-container">
+        <section class="stage" id="stage">
             <div id="placeholder">No source active</div>
-            <video id="video" hidden></video>
-            <img id="still" hidden>
-            <canvas id="overlay" hidden></canvas>
-            <canvas id="stage" hidden></canvas>
-        </div>
+            <video id="video" playsinline muted hidden></video>
+            <img id="still" alt="" hidden>
+            <canvas id="overlay"></canvas>
+        </section>
 
         <div class="status-area">
             <div id="status" role="status">Ready</div>
@@ -289,6 +277,8 @@
         const placeholder = document.getElementById('placeholder');
         const status = document.getElementById('status');
 
+        let lastDetections = [];
+
         const startCamBtn = document.getElementById('startCam');
         const openFileBtn = document.getElementById('openFile');
         const stopBtn = document.getElementById('stop');
@@ -319,6 +309,7 @@
         function stopAll() {
             runId = null;
             isRunning = false;
+            lastDetections = [];
             if (video.srcObject) {
                 video.srcObject.getTracks().forEach(t => t.stop());
                 video.srcObject = null;
@@ -327,6 +318,7 @@
             still.hidden = true;
             overlay.hidden = true;
             stage.hidden = true;
+            stage.classList.remove('live');
             placeholder.hidden = false;
             updateStatus('Ready');
             statusFps.textContent = '-';
@@ -342,6 +334,38 @@
             statusFound.textContent = '-';
             frameCount = 0;
             lastFrameTime = Date.now();
+        }
+
+        function colorParts(label) {
+            let hue = 0;
+            for (const ch of label) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
+            return { line: `hsl(${hue} 85% 60%)`, fill: `hsl(${hue} 70% 30%)` };
+        }
+
+        function draw(detections) {
+            const rect = stage.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            overlay.width = Math.round(rect.width * dpr);
+            overlay.height = Math.round(rect.height * dpr);
+            const ctx = overlay.getContext('2d');
+            ctx.scale(dpr, dpr);
+            ctx.lineWidth = 3;
+            const font = getComputedStyle(document.body).fontFamily;
+            ctx.font = `600 14px ${font}`;
+            ctx.textBaseline = 'top';
+            for (const d of detections) {
+                const [x1, y1, x2, y2] = d.box;
+                const x = x1 * rect.width, y = y1 * rect.height;
+                const c = colorParts(d.label);
+                ctx.strokeStyle = c.line;
+                ctx.strokeRect(x, y, (x2 - x1) * rect.width, (y2 - y1) * rect.height);
+                const text = `${d.label} ${Math.round(d.conf * 100)}%`;
+                const labelY = y >= 22 ? y - 22 : y;
+                ctx.fillStyle = c.fill;
+                ctx.fillRect(x - 1.5, labelY, ctx.measureText(text).width + 10, 22);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(text, x + 4, labelY + 4);
+            }
         }
 
         async function fetchInfo() {
@@ -399,30 +423,8 @@
                         .join(', ') || 'none';
                     statusFound.textContent = summary;
 
-                    overlay.width = stage.width;
-                    overlay.height = stage.height;
-                    const ctx = overlay.getContext('2d');
-                    ctx.clearRect(0, 0, overlay.width, overlay.height);
-
-                    const w = overlay.width;
-                    const h = overlay.height;
-                    ctx.strokeStyle = '#00ff00';
-                    ctx.lineWidth = 2;
-                    ctx.font = '14px monospace';
-                    ctx.fillStyle = '#00ff00';
-
-                    result.detections.forEach(det => {
-                        const [x1, y1, x2, y2] = det.box;
-                        const px1 = x1 * w, py1 = y1 * h;
-                        const px2 = x2 * w, py2 = y2 * h;
-                        ctx.strokeRect(px1, py1, px2 - px1, py2 - py1);
-                        const label = `${det.label} ${det.conf.toFixed(2)}`;
-                        const tm = ctx.measureText(label);
-                        ctx.fillRect(px1, py1 - 20, tm.width + 4, 20);
-                        ctx.fillStyle = '#000';
-                        ctx.fillText(label, px1 + 2, py1 - 6);
-                        ctx.fillStyle = '#00ff00';
-                    });
+                    lastDetections = result.detections;
+                    draw(lastDetections);
 
                 } catch (e) {
                     if (isRunning && runId === currentRunId) {
@@ -480,10 +482,6 @@
             tempCanvas.height = imgElement.naturalHeight || imgElement.height;
             tempCanvas.getContext('2d').drawImage(imgElement, 0, 0);
 
-            stage.width = tempCanvas.width;
-            stage.height = tempCanvas.height;
-            stage.getContext('2d').drawImage(imgElement, 0, 0);
-
             const scale = Math.max(tempCanvas.width, tempCanvas.height) / SEND_MAX;
             const w = Math.round(tempCanvas.width / scale);
             const h = Math.round(tempCanvas.height / scale);
@@ -506,10 +504,6 @@
                     tempCanvas.width = videoElement.videoWidth;
                     tempCanvas.height = videoElement.videoHeight;
                     tempCanvas.getContext('2d').drawImage(videoElement, 0, 0);
-
-                    stage.width = tempCanvas.width;
-                    stage.height = tempCanvas.height;
-                    stage.getContext('2d').drawImage(videoElement, 0, 0);
 
                     const scale = Math.max(tempCanvas.width, tempCanvas.height) / SEND_MAX;
                     const w = Math.round(tempCanvas.width / scale);
@@ -535,6 +529,7 @@
                 video.hidden = false;
                 placeholder.hidden = true;
                 stage.hidden = false;
+                stage.classList.add('live');
                 overlay.hidden = false;
 
                 video.addEventListener('loadedmetadata', () => {
@@ -566,6 +561,7 @@
                     still.hidden = true;
                     placeholder.hidden = true;
                     stage.hidden = false;
+                    stage.classList.add('live');
                     overlay.hidden = false;
                     videoEl.play();
                     videoMode(videoEl);
@@ -578,6 +574,7 @@
                     still.hidden = false;
                     placeholder.hidden = true;
                     stage.hidden = false;
+                    stage.classList.add('live');
                     overlay.hidden = false;
                     imageMode(still);
                 });
@@ -585,6 +582,12 @@
         });
 
         stopBtn.addEventListener('click', stopAll);
+
+        window.addEventListener('resize', () => {
+            if (lastDetections.length > 0 && isRunning) {
+                draw(lastDetections);
+            }
+        });
 
         fetchInfo();
     </script>
