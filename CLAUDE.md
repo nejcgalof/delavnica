@@ -76,7 +76,7 @@ browser (index.html) --POST /detect, JPEG--> server.py (FastAPI) --> Ultralytics
 ### 4.2 Client (`index.html`)
 
 - Three input modes: `camera`, `video` (file, looped, muted) and `image` (file, one shot).
-- A sequential loop: grab a frame, scale it so the longest side is at most `SEND_MAX` (640 px), encode it as JPEG (quality 0.7), `POST` it to `/detect?conf=<slider>`, draw the result, then grab the next frame. The next frame is never grabbed before the previous answer arrives. A `runId` token cancels a running loop.
+- A sequential loop: grab a frame, scale it so the longest side is at most `SEND_MAX` (640 px), encode it as JPEG (quality 0.7), `POST` it to `/detect?conf=<slider minimum>`, keep the raw answer, draw only the detections at or above the slider value, then grab the next frame. The slider filters on the page, so moving it updates the boxes at once without a new request. The next frame is never grabbed before the previous answer arrives. A `runId` token cancels a running loop.
 - The overlay canvas has the same size as the stage (times the device pixel ratio). Boxes are drawn from normalised coordinates, so any display size works. The live video stays smooth; the boxes are the latest detection.
 - The readout shows FPS (smoothed), the server's milliseconds per frame, and a summary such as `person ×2, cup`.
 
@@ -152,6 +152,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 30
 | Overlay canvas over live video | Smooth video at a low detection rate | Frame-exact sync becomes a requirement |
 | Model loaded at import, with warm-up | The first demo frame is not slow, and startup fails fast | Tests need lazy loading (work order) |
 | Single HTML file, no CDN | Works offline and on locked-down networks | A build step becomes necessary |
+| Slider filters on the page | One request per frame at the slider's minimum; the page hides detections below the slider value, so moving the slider updates the boxes instantly in every mode, including a still image, and costs the server nothing | The server needs to return different results per threshold |
 
 ## 7. Forbidden actions
 
