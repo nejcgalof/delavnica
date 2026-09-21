@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO Object Detection</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-color: #f5f5f5;
+            --text-color: #333;
+            --border-color: #ddd;
+            --button-bg: #007bff;
+            --button-hover: #0056b3;
+            --error-color: #dc3545;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg-color: #1e1e1e;
+                --text-color: #e0e0e0;
+                --border-color: #444;
+                --button-bg: #0d6efd;
+                --button-hover: #0a58ca;
+                --error-color: #f8615c;
+            }
+        }
+
+        :root[data-theme="dark"] {
+            --bg-color: #1e1e1e;
+            --text-color: #e0e0e0;
+            --border-color: #444;
+            --button-bg: #0d6efd;
+            --button-hover: #0a58ca;
+            --error-color: #f8615c;
+        }
+
+        [hidden] {
+            display: none !important;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            padding: 16px;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 10px 16px;
+            border: none;
+            border-radius: 4px;
+            background: var(--button-bg);
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            min-height: 44px;
+            min-width: 44px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: var(--button-hover);
+        }
+
+        button:focus {
+            outline: 2px solid var(--button-bg);
+            outline-offset: 2px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        input[type="range"] {
+            flex: 1;
+            min-width: 100px;
+            min-height: 30px;
+        }
+
+        .slider-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #file {
+            display: none;
+        }
+
+        .media-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: #000;
+            aspect-ratio: 4 / 3;
+        }
+
+        #placeholder {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #999;
+            font-size: 16px;
+            background: #222;
+        }
+
+        #stage {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        #video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            transform: scaleX(-1);
+        }
+
+        #still {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: crosshair;
+        }
+
+        .status-area {
+            background: var(--border-color);
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-family: "Courier New", monospace;
+            font-size: 14px;
+            min-height: 60px;
+        }
+
+        #status {
+            display: block;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .info-label {
+            font-weight: 500;
+        }
+
+        .error {
+            color: var(--error-color);
+        }
+
+        .success {
+            color: #28a745;
+        }
+
+        @media (max-width: 600px) {
+            .controls {
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+
+            input[type="range"] {
+                width: 100%;
+            }
+
+            h1 {
+                font-size: 22px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>YOLO Object Detection</h1>
+
+        <div class="controls">
+            <button id="startCam">Start camera</button>
+            <button id="openFile">Open image or video</button>
+            <button id="stop">Stop</button>
+            <div class="slider-label">
+                <label for="conf">Confidence:</label>
+                <input type="range" id="conf" min="0.01" max="0.99" step="0.01" value="0.35">
+                <span id="confOut">0.35</span>
+            </div>
+        </div>
+
+        <div class="media-container">
+            <div id="placeholder">No source active</div>
+            <video id="video" hidden></video>
+            <img id="still" hidden>
+            <canvas id="overlay" hidden></canvas>
+            <canvas id="stage" hidden></canvas>
+        </div>
+
+        <div class="status-area">
+            <div id="status" role="status">Ready</div>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Model:</span>
+                    <span id="model">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">FPS:</span>
+                    <span id="fps">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Server ms:</span>
+                    <span id="ms">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Detected:</span>
+                    <span id="found">-</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="file" accept="image/*,video/*">
+
+    <script>
+        const SEND_MAX = 640;
+        const JPEG_QUALITY = 0.7;
+
+        const video = document.getElementById('video');
+        const still = document.getElementById('still');
+        const overlay = document.getElementById('overlay');
+        const stage = document.getElementById('stage');
+        const placeholder = document.getElementById('placeholder');
+        const status = document.getElementById('status');
+
+        const startCamBtn = document.getElementById('startCam');
+        const openFileBtn = document.getElementById('openFile');
+        const stopBtn = document.getElementById('stop');
+        const confSlider = document.getElementById('conf');
+        const confOut = document.getElementById('confOut');
+        const fileInput = document.getElementById('file');
+
+        const statusFps = document.getElementById('fps');
+        const statusMs = document.getElementById('ms');
+        const statusFound = document.getElementById('found');
+        const statusModel = document.getElementById('model');
+
+        let runId = null;
+        let isRunning = false;
+        let lastFrameTime = Date.now();
+        let frameCount = 0;
+        let smoothedFps = 0;
+
+        confSlider.addEventListener('input', (e) => {
+            confOut.textContent = parseFloat(e.target.value).toFixed(2);
+        });
+
+        function updateStatus(msg, isError = false) {
+            status.textContent = msg;
+            status.className = isError ? 'error' : '';
+        }
+
+        function stopAll() {
+            runId = null;
+            isRunning = false;
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(t => t.stop());
+                video.srcObject = null;
+            }
+            video.hidden = true;
+            still.hidden = true;
+            overlay.hidden = true;
+            stage.hidden = true;
+            placeholder.hidden = false;
+            updateStatus('Ready');
+            statusFps.textContent = '-';
+            statusMs.textContent = '-';
+            statusFound.textContent = '-';
+        }
+
+        function begin() {
+            isRunning = true;
+            runId = Math.random();
+            statusFps.textContent = '-';
+            statusMs.textContent = '-';
+            statusFound.textContent = '-';
+            frameCount = 0;
+            lastFrameTime = Date.now();
+        }
+
+        async function fetchInfo() {
+            try {
+                const resp = await fetch('/info');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    statusModel.textContent = data.model || '-';
+                }
+            } catch (e) {
+                statusModel.textContent = 'error';
+            }
+        }
+
+        async function sendFrame(canvas) {
+            if (!isRunning) return;
+            const currentRunId = runId;
+
+            canvas.toBlob(async (blob) => {
+                if (!isRunning || runId !== currentRunId) return;
+
+                try {
+                    const conf = parseFloat(confSlider.value);
+                    const resp = await fetch(`/detect?conf=${conf}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'image/jpeg' },
+                        body: blob
+                    });
+
+                    if (!resp.ok) {
+                        updateStatus(`Error: ${resp.status}`, true);
+                        return;
+                    }
+
+                    const result = await resp.json();
+                    frameCount++;
+
+                    const now = Date.now();
+                    const elapsed = now - lastFrameTime;
+                    if (elapsed > 500) {
+                        smoothedFps = (frameCount / elapsed * 1000 * 0.7 + smoothedFps * 0.3).toFixed(1);
+                        statusFps.textContent = smoothedFps;
+                        frameCount = 0;
+                        lastFrameTime = now;
+                    }
+
+                    statusMs.textContent = result.inference_ms.toFixed(1);
+
+                    const classCount = {};
+                    result.detections.forEach(d => {
+                        classCount[d.label] = (classCount[d.label] || 0) + 1;
+                    });
+                    const summary = Object.entries(classCount)
+                        .map(([k, v]) => `${k} ×${v}`)
+                        .join(', ') || 'none';
+                    statusFound.textContent = summary;
+
+                    overlay.width = stage.width;
+                    overlay.height = stage.height;
+                    const ctx = overlay.getContext('2d');
+                    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+                    const w = overlay.width;
+                    const h = overlay.height;
+                    ctx.strokeStyle = '#00ff00';
+                    ctx.lineWidth = 2;
+                    ctx.font = '14px monospace';
+                    ctx.fillStyle = '#00ff00';
+
+                    result.detections.forEach(det => {
+                        const [x1, y1, x2, y2] = det.box;
+                        const px1 = x1 * w, py1 = y1 * h;
+                        const px2 = x2 * w, py2 = y2 * h;
+                        ctx.strokeRect(px1, py1, px2 - px1, py2 - py1);
+                        const label = `${det.label} ${det.conf.toFixed(2)}`;
+                        const tm = ctx.measureText(label);
+                        ctx.fillRect(px1, py1 - 20, tm.width + 4, 20);
+                        ctx.fillStyle = '#000';
+                        ctx.fillText(label, px1 + 2, py1 - 6);
+                        ctx.fillStyle = '#00ff00';
+                    });
+
+                } catch (e) {
+                    if (isRunning && runId === currentRunId) {
+                        updateStatus(`Network error: ${e.message}`, true);
+                    }
+                }
+            }, 'image/jpeg', JPEG_QUALITY);
+        }
+
+        async function cameraLoop() {
+            begin();
+            updateStatus('Streaming from camera...');
+
+            while (isRunning && runId !== null) {
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = video.videoWidth;
+                    tempCanvas.height = video.videoHeight;
+                    const ctx = tempCanvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0);
+
+                    stage.width = tempCanvas.width;
+                    stage.height = tempCanvas.height;
+                    const stageCtx = stage.getContext('2d');
+                    stageCtx.drawImage(video, 0, 0);
+
+                    const scale = Math.max(tempCanvas.width, tempCanvas.height) / SEND_MAX;
+                    const w = Math.round(tempCanvas.width / scale);
+                    const h = Math.round(tempCanvas.height / scale);
+                    const resized = document.createElement('canvas');
+                    resized.width = w;
+                    resized.height = h;
+                    resized.getContext('2d').drawImage(tempCanvas, 0, 0, w, h);
+
+                    await new Promise(resolve => {
+                        resized.toBlob(async (blob) => {
+                            await sendFrame(resized);
+                            resolve();
+                        }, 'image/jpeg', JPEG_QUALITY);
+                    });
+
+                    await new Promise(r => setTimeout(r, 50));
+                } else {
+                    await new Promise(r => setTimeout(r, 100));
+                }
+            }
+        }
+
+        async function imageMode(imgElement) {
+            begin();
+            updateStatus('Detecting in image...');
+
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = imgElement.naturalWidth || imgElement.width;
+            tempCanvas.height = imgElement.naturalHeight || imgElement.height;
+            tempCanvas.getContext('2d').drawImage(imgElement, 0, 0);
+
+            stage.width = tempCanvas.width;
+            stage.height = tempCanvas.height;
+            stage.getContext('2d').drawImage(imgElement, 0, 0);
+
+            const scale = Math.max(tempCanvas.width, tempCanvas.height) / SEND_MAX;
+            const w = Math.round(tempCanvas.width / scale);
+            const h = Math.round(tempCanvas.height / scale);
+            const resized = document.createElement('canvas');
+            resized.width = w;
+            resized.height = h;
+            resized.getContext('2d').drawImage(tempCanvas, 0, 0, w, h);
+
+            await sendFrame(resized);
+            updateStatus('Ready');
+        }
+
+        async function videoMode(videoElement) {
+            begin();
+            updateStatus('Playing video...');
+
+            while (isRunning && runId !== null) {
+                if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = videoElement.videoWidth;
+                    tempCanvas.height = videoElement.videoHeight;
+                    tempCanvas.getContext('2d').drawImage(videoElement, 0, 0);
+
+                    stage.width = tempCanvas.width;
+                    stage.height = tempCanvas.height;
+                    stage.getContext('2d').drawImage(videoElement, 0, 0);
+
+                    const scale = Math.max(tempCanvas.width, tempCanvas.height) / SEND_MAX;
+                    const w = Math.round(tempCanvas.width / scale);
+                    const h = Math.round(tempCanvas.height / scale);
+                    const resized = document.createElement('canvas');
+                    resized.width = w;
+                    resized.height = h;
+                    resized.getContext('2d').drawImage(tempCanvas, 0, 0, w, h);
+
+                    await sendFrame(resized);
+                    await new Promise(r => setTimeout(r, 50));
+                } else {
+                    await new Promise(r => setTimeout(r, 100));
+                }
+            }
+        }
+
+        startCamBtn.addEventListener('click', async () => {
+            stopAll();
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                video.hidden = false;
+                placeholder.hidden = true;
+                stage.hidden = false;
+                overlay.hidden = false;
+
+                video.addEventListener('loadedmetadata', () => {
+                    cameraLoop();
+                }, { once: true });
+            } catch (e) {
+                updateStatus(`Camera error: ${e.message}`, true);
+            }
+        });
+
+        openFileBtn.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            stopAll();
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const url = URL.createObjectURL(file);
+            const isVideo = file.type.startsWith('video');
+
+            if (isVideo) {
+                const videoEl = document.createElement('video');
+                videoEl.src = url;
+                videoEl.loop = true;
+                videoEl.muted = true;
+                videoEl.addEventListener('loadedmetadata', () => {
+                    still.hidden = true;
+                    placeholder.hidden = true;
+                    stage.hidden = false;
+                    overlay.hidden = false;
+                    videoEl.play();
+                    videoMode(videoEl);
+                });
+            } else {
+                const imgEl = document.createElement('img');
+                imgEl.src = url;
+                imgEl.addEventListener('load', () => {
+                    still.src = url;
+                    still.hidden = false;
+                    placeholder.hidden = true;
+                    stage.hidden = false;
+                    overlay.hidden = false;
+                    imageMode(still);
+                });
+            }
+        });
+
+        stopBtn.addEventListener('click', stopAll);
+
+        fetchInfo();
+    </script>
+</body>
+</html>
